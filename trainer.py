@@ -5,6 +5,11 @@ import torch
 from utils import factory
 from utils.data_manager import DataManager
 from utils.toolkit import count_parameters
+from utils.efficiency import (
+    MetricsLogger,
+    PhaseTimer,
+    inference_flops_per_sample,
+)
 import os
 import numpy as np
 
@@ -64,14 +69,45 @@ def _train(args):
 
     cnn_curve, nme_curve = {"top1": [], "top5": []}, {"top1": [], "top5": []}
     cnn_matrix, nme_matrix = [], []
+    metrics_log = MetricsLogger(logfilename + "_metrics.json", args)
 
     for task in range(data_manager.nb_tasks):
         logging.info("All params: {}".format(count_parameters(model._network)))
         logging.info(
             "Trainable params: {}".format(count_parameters(model._network, True))
         )
-        model.incremental_train(data_manager)
-        cnn_accy, nme_accy = model.eval_task()
+        with PhaseTimer() as train_phase:
+            model.incremental_train(data_manager)
+        with PhaseTimer() as eval_phase:
+            cnn_accy, nme_accy = model.eval_task()
+        test_dataset = getattr(model, "test_loader", None)
+        test_dataset = test_dataset.dataset if test_dataset is not None else None
+        infer_flops = (
+            inference_flops_per_sample(model, test_dataset)
+            if test_dataset is not None
+            else None
+        )
+        metrics_log.log_task(
+            task,
+            train_seconds=train_phase.seconds,
+            train_peak_mem_mb=train_phase.peak_mb,
+            eval_seconds=eval_phase.seconds,
+            eval_peak_mem_mb=eval_phase.peak_mb,
+            eval_ms_per_sample=(
+                1000.0 * eval_phase.seconds / max(len(test_dataset), 1)
+                if test_dataset is not None
+                else None
+            ),
+            inference_flops_per_sample=infer_flops,
+            total_params=count_parameters(model._network),
+            trainable_params=count_parameters(model._network, True),
+            train_samples=(
+                len(model.train_loader.dataset)
+                if hasattr(model, "train_loader")
+                else None
+            ),
+            cnn_top1=cnn_accy["top1"],
+        )
         model.after_task()
 
         if nme_accy is not None:
