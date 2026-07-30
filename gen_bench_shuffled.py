@@ -53,10 +53,11 @@ DATASETS = {
 
 SEEDS = [1993, 1994, 1995, 1996, 1997]
 
-# Flat 3h for every job: highest observed runtime in the original (non-shuffled)
-# sweep was ~1.5-2h, so 3h leaves headroom while letting more jobs run
-# concurrently per SBU wave than the old 6h/8h split.
-TIME_LIMIT = "03:00:00"
+# Flat 2h for every job: tight against the ~1.5-2h ceiling observed in the
+# original (non-shuffled) sweep, but lets 3 methods (18 dataset jobs) fit in
+# one SBU wave instead of 2. A job that runs long gets killed mid-run by
+# SLURM at this limit -- if that starts happening, raise this back up.
+TIME_LIMIT = "02:00:00"
 
 SBATCH_TEMPLATE = """#!/bin/bash
 #SBATCH --job-name=pilot-{method}-shuf-{dataset}
