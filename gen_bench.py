@@ -58,7 +58,12 @@ SEEDS = [1993, 1994, 1995, 1996, 1997]
 # Light methods finish a single seed comfortably within a day; prompt-based
 # and expert-based methods get the long limit.
 TIME_LIGHT = "06:00:00"
-TIME_HEAVY = "16:00:00"
+# 8h, not 16h: a single 30-job wave at 16h (61,440 SBU) exceeds this
+# account's entire balance (~39k SBU) by itself, guaranteeing cancellation
+# regardless of what else is queued. 8h (30,720 SBU) fits with headroom,
+# and real usage is expected to be far below even that (RanPAC finished in
+# minutes against a 6h reservation).
+TIME_HEAVY = "08:00:00"
 HEAVY = {"l2p", "dualprompt", "coda_prompt", "ease", "mos"}
 
 SBATCH_TEMPLATE = """#!/bin/bash
