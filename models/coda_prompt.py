@@ -56,7 +56,7 @@ class Learner(BaseLearner):
         self.data_manager = data_manager
         self.train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True, drop_last=True, num_workers=num_workers)
         test_dataset = data_manager.get_dataset(np.arange(0, self._total_classes), source="test", mode="test" )
-        self.test_loader = DataLoader(test_dataset, batch_size=self.batch_size, shuffle=False, drop_last=False, num_workers=num_workers)
+        self.test_loader = DataLoader(test_dataset, batch_size=self.batch_size, shuffle=bool(self.args.get("eval_shuffle", False)), drop_last=False, num_workers=num_workers)
 
         if len(self._multiple_gpus) > 1:
             print('Multiple GPUs')
