@@ -81,12 +81,24 @@ python main.py --config {config} --seed "$SEED"
 """
 
 
+# Plain bash launcher (not itself an sbatch script): submits the per-dataset
+# array job for every dataset of one method in a single invocation, e.g.
+# `./slurm_shuffled/ranpac.sh` submits all 6 of that method's dataset jobs.
+LAUNCHER_TEMPLATE = """#!/bin/bash
+# Submits all {n_datasets} dataset jobs for {method} (eval_shuffle=true ablation).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+{sbatch_lines}
+"""
+
+
 def main():
     os.makedirs("exps/bench_shuffled", exist_ok=True)
     os.makedirs("slurm_shuffled", exist_ok=True)
 
     sbatch_cmds = []
     for method, (default_cfg, inr_cfg) in METHODS.items():
+        method_sbatch_lines = []
         for dataset, (init_cls, increment) in DATASETS.items():
             base_path = inr_cfg if dataset == "imagenetr" else default_cfg
             with open(base_path) as f:
@@ -118,11 +130,23 @@ def main():
                 )
             os.chmod(script_path, 0o755)
             sbatch_cmds.append(f"sbatch {script_path}")
+            method_sbatch_lines.append(f"sbatch slurm_shuffled/run_{method}_{dataset}.sh")
+
+        launcher_path = f"slurm_shuffled/{method}.sh"
+        with open(launcher_path, "w") as f:
+            f.write(
+                LAUNCHER_TEMPLATE.format(
+                    method=method,
+                    n_datasets=len(DATASETS),
+                    sbatch_lines="\n".join(method_sbatch_lines),
+                )
+            )
+        os.chmod(launcher_path, 0o755)
 
     print(f"{len(sbatch_cmds)} (method, dataset) pairs x 5 seeds generated.")
-    print("Nothing submitted. To launch:")
-    for cmd in sbatch_cmds:
-        print(f"  {cmd}")
+    print(f"Plus {len(METHODS)} per-method launchers (slurm_shuffled/<method>.sh).")
+    print("Nothing submitted. To launch one method's full dataset sweep:")
+    print("  ./slurm_shuffled/<method>.sh")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,10 @@
+#!/bin/bash
+# Submits all 6 dataset jobs for ease (eval_shuffle=true ablation).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+sbatch slurm_shuffled/run_ease_cifar224.sh
+sbatch slurm_shuffled/run_ease_cub.sh
+sbatch slurm_shuffled/run_ease_imageneta.sh
+sbatch slurm_shuffled/run_ease_imagenetr.sh
+sbatch slurm_shuffled/run_ease_omnibenchmark.sh
+sbatch slurm_shuffled/run_ease_vtab.sh
