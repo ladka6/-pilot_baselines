@@ -27,6 +27,22 @@ METHODS = {
     "mos": ("exps/mos.json", "exps/mos_inr.json"),
 }
 
+# PILOT's reference configs default to ViT-B/16-IN1K. Our own TOSCA configs
+# (and the TOSCA paper's main Table 1) use ViT-B/16-IN21K -- override to the
+# IN21K variant per method so the baselines are comparable to our numbers.
+# (l2p/dualprompt/coda_prompt in21k variants were added to their backbone/
+# files; the others already ship an in21k-registered name in utils/inc_net.py.)
+BACKBONE_IN21K = {
+    "simplecil": "pretrained_vit_b16_224_in21k",
+    "ranpac": "pretrained_vit_b16_224_in21k_adapter",
+    "aper_adapter": "pretrained_vit_b16_224_in21k_adapter",
+    "ease": "vit_base_patch16_224_in21k_ease",
+    "mos": "vit_base_patch16_224_in21k_mos",
+    "l2p": "vit_base_patch16_224_in21k_l2p",
+    "dualprompt": "vit_base_patch16_224_in21k_dualprompt",
+    "coda_prompt": "vit_base_patch16_224_in21k_coda_prompt",
+}
+
 # dataset -> (init_cls, increment), identical to the TOSCA repo's configs
 DATASETS = {
     "cifar224": (5, 5),
@@ -88,6 +104,7 @@ def main():
             config["increment"] = increment
             config["shuffle"] = True
             config["seed"] = SEEDS
+            config["backbone_type"] = BACKBONE_IN21K[method]
 
             config_path = f"exps/bench/{method}_{dataset}.json"
             with open(config_path, "w") as f:

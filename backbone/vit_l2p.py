@@ -812,6 +812,15 @@ def vit_base_patch16_224_l2p(pretrained=False, **kwargs):
 
 
 @register_model
+def vit_base_patch16_224_in21k_l2p(pretrained=False, **kwargs):
+    """ ViT-Base (ViT-B/16) pretrained on ImageNet-21k (no IN1k fine-tuning),
+    for comparability with our own IN21K-backbone TOSCA runs."""
+    model_kwargs = dict(patch_size=16, embed_dim=768, depth=12, num_heads=12, **kwargs)
+    model = _create_vision_transformer('vit_base_patch16_224_in21k', pretrained=pretrained, **model_kwargs)
+    return model
+
+
+@register_model
 def vit_base_patch16_384_l2p(pretrained=False, **kwargs):
     """ ViT-Base model (ViT-B/16) from original paper (https://arxiv.org/abs/2010.11929).
     ImageNet-1k weights fine-tuned from in21k @ 384x384, source https://github.com/google-research/vision_transformer.
