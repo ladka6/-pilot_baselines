@@ -9,6 +9,7 @@ from utils.efficiency import (
     MetricsLogger,
     PhaseTimer,
     inference_flops_per_sample,
+    profile_flops,
 )
 import os
 import numpy as np
@@ -77,8 +78,25 @@ def _train(args):
         logging.info(
             "Trainable params: {}".format(count_parameters(model._network, True))
         )
-        with PhaseTimer() as train_phase:
-            model.incremental_train(data_manager)
+        # Opt-in (config flag `profile_train_flops`, off by default): measure
+        # the REAL forward+backward FLOPs of this task's actual training
+        # call via torch.profiler, instead of the analytic 3x-forward
+        # estimate computed later in aggregate_results.py. Real profiling
+        # naturally captures method-specific nuances the analytic estimate
+        # can't (e.g. a method that only backprops through a small unfrozen
+        # subset on later tasks, or only trains on task 0) without any
+        # per-method special-casing. Off by default because profiling adds
+        # real overhead -- meant for short, reduced-epoch dedicated runs,
+        # not the full 5-seed accuracy sweep.
+        train_flops_measured = None
+        if args.get("profile_train_flops", False):
+            with PhaseTimer() as train_phase:
+                train_flops_measured = profile_flops(
+                    model.incremental_train, data_manager
+                )
+        else:
+            with PhaseTimer() as train_phase:
+                model.incremental_train(data_manager)
         with PhaseTimer() as eval_phase:
             cnn_accy, nme_accy = model.eval_task()
         test_dataset = getattr(model, "test_loader", None)
@@ -105,6 +123,17 @@ def _train(args):
             train_samples=(
                 len(model.train_loader.dataset)
                 if hasattr(model, "train_loader")
+                else None
+            ),
+            train_flops_measured=train_flops_measured,
+            profiled_epochs=(
+                (
+                    args.get("epochs")
+                    or args.get("tuned_epoch")
+                    or args.get("init_epochs")
+                    or args.get("later_epochs")
+                )
+                if args.get("profile_train_flops", False)
                 else None
             ),
             cnn_top1=cnn_accy["top1"],
