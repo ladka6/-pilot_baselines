@@ -219,12 +219,21 @@ class Learner(BaseLearner):
                 features_per_cls = vectors
                 # print(features_per_cls.shape)
                 self.cls_mean[class_idx] = features_per_cls.mean(dim=0).to(self._device)
-                self.cls_cov[class_idx] = torch.cov(features_per_cls.T) + (torch.eye(self.cls_mean[class_idx].shape[-1]) * 1e-4).to(self._device)
+                cov = torch.cov(features_per_cls.T)
+                cov = (cov + cov.T) / 2
+                # Fixed 1e-4 jitter isn't enough when a class has fewer samples
+                # than the feature dim (rank-deficient cov, e.g. ImageNet-A):
+                # scale the jitter to the matrix's own magnitude instead.
+                eps = max(1e-4, 1e-3 * cov.diagonal().mean().item())
+                self.cls_cov[class_idx] = cov + (torch.eye(self.cls_mean[class_idx].shape[-1]) * eps).to(self._device)
             elif self.args["ca_storage_efficient_method"] == 'variance':
                 features_per_cls = vectors
                 # print(features_per_cls.shape)
                 self.cls_mean[class_idx] = features_per_cls.mean(dim=0).to(self._device)
-                self.cls_cov[class_idx] = torch.diag(torch.cov(features_per_cls.T) + (torch.eye(self.cls_mean[class_idx].shape[-1]) * 1e-4).to(self._device))
+                cov = torch.cov(features_per_cls.T)
+                cov = (cov + cov.T) / 2
+                eps = max(1e-4, 1e-3 * cov.diagonal().mean().item())
+                self.cls_cov[class_idx] = torch.diag(cov + (torch.eye(self.cls_mean[class_idx].shape[-1]) * eps).to(self._device))
             elif self.args["ca_storage_efficient_method"] == 'multi-centroid':
                 from sklearn.cluster import KMeans
                 n_clusters = self.args["n_centroids"] # 10

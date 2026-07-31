@@ -53,11 +53,19 @@ DATASETS = {
 
 SEEDS = [1993, 1994, 1995, 1996, 1997]
 
-# Flat 2h for every job: tight against the ~1.5-2h ceiling observed in the
-# original (non-shuffled) sweep, but lets 3 methods (18 dataset jobs) fit in
-# one SBU wave instead of 2. A job that runs long gets killed mid-run by
-# SLURM at this limit -- if that starts happening, raise this back up.
-TIME_LIMIT = "02:00:00"
+# Flat 2h undershot for the heavier methods on the bigger/many-task datasets:
+# ease/mos/coda_prompt all TIMEOUT'd on cifar224 and omnibenchmark, and
+# coda_prompt also timed out on imagenetr. Per-dataset limit instead of one
+# flat number, based on observed runtime (cifar224 has the most train images
+# per class of any of these sets, independent of task count).
+TIME_BY_DATASET = {
+    "cifar224": "06:00:00",
+    "cub": "04:00:00",
+    "imageneta": "02:00:00",
+    "imagenetr": "03:00:00",
+    "omnibenchmark": "04:00:00",
+    "vtab": "02:00:00",
+}
 
 SBATCH_TEMPLATE = """#!/bin/bash
 #SBATCH --job-name=pilot-{method}-shuf-{dataset}
@@ -125,7 +133,7 @@ def main():
                     SBATCH_TEMPLATE.format(
                         method=method,
                         dataset=dataset,
-                        time=TIME_LIMIT,
+                        time=TIME_BY_DATASET[dataset],
                         config=config_path,
                     )
                 )
