@@ -1,12 +1,10 @@
-"""Compare eval_shuffle=false (prefix bench) vs eval_shuffle=true (prefix
-benchshuf) accuracy for every (method, dataset) that has results under both.
+"""Report accuracy for the eval_shuffle=true runs (prefix "benchshuf"), our
+canonical evaluation protocol for the PILOT baselines going forward.
 
-Reuses the same *_metrics.json files aggregate_results.py reads, but that
-script keys runs by (model, dataset) alone, which silently merges bench and
-benchshuf runs of the same method/dataset. This script keys by
-(model, dataset, prefix) instead -- prefix is recovered from the metrics
-filename (`<prefix>_<seed>_<backbone>_metrics.json`), since MetricsLogger's
-meta dict doesn't carry it.
+Reuses the *_metrics.json files aggregate_results.py reads, but filters to
+prefix="benchshuf" only (recovered from the metrics filename, since
+MetricsLogger's meta dict doesn't carry it) -- ignores any leftover
+eval_shuffle=false ("bench") runs.
 
 Usage:
     python aggregate_shuffle_ablation.py [--roots logs]
@@ -21,10 +19,12 @@ import numpy as np
 
 
 def load_runs(roots):
-    """-> {(model, dataset, prefix): {seed: tasks}}"""
+    """-> {(model, dataset): {seed: tasks}}"""
     runs = defaultdict(dict)
     for root in roots:
         for path in glob.glob(os.path.join(root, "**", "*_metrics.json"), recursive=True):
+            if not os.path.basename(path).startswith("benchshuf_"):
+                continue
             try:
                 with open(path) as f:
                     run = json.load(f)
@@ -34,8 +34,7 @@ def load_runs(roots):
             meta, tasks = run.get("meta", {}), run.get("tasks", [])
             if not tasks:
                 continue
-            prefix = os.path.basename(path).split("_")[0]
-            key = (str(meta.get("model_name")), str(meta.get("dataset")), prefix)
+            key = (str(meta.get("model_name")), str(meta.get("dataset")))
             seed = meta.get("seed")
             prev = runs[key].get(seed)
             if prev is None or len(tasks) > len(prev):
@@ -57,10 +56,8 @@ def summarize(by_seed):
     n_tasks = [len(t) for t in by_seed.values()]
     expected = max(n_tasks) if n_tasks else 0
     complete = {s: t for s, t in by_seed.items() if len(t) == expected}
-    finals = [final_top1(t) for t in complete.values()]
-    avgs = [avg_inc_acc(t) for t in complete.values()]
-    finals = [f for f in finals if f is not None]
-    avgs = [a for a in avgs if a is not None]
+    finals = [f for f in (final_top1(t) for t in complete.values()) if f is not None]
+    avgs = [a for a in (avg_inc_acc(t) for t in complete.values()) if a is not None]
     return {
         "n_seeds": len(complete),
         "n_partial": len(by_seed) - len(complete),
@@ -84,33 +81,20 @@ def main():
 
     runs = load_runs([r for r in cli.roots if os.path.isdir(r)])
     if not runs:
-        print("No *_metrics.json found under: " + ", ".join(cli.roots))
+        print("No benchshuf_*_metrics.json found under: " + ", ".join(cli.roots))
         return
 
-    pairs = defaultdict(dict)
-    for (model, dataset, prefix), by_seed in runs.items():
-        pairs[(model, dataset)][prefix] = summarize(by_seed)
-
-    hdr = f"{'method':<16}{'dataset':<16}{'orig (n)':<16}{'shuf (n)':<16}{'delta (final)':<14}"
+    hdr = f"{'method':<16}{'dataset':<16}{'seeds':<7}{'final top1':<16}{'avg inc acc':<16}"
     print(hdr)
     print("-" * len(hdr))
-    for (model, dataset), by_prefix in sorted(pairs.items()):
-        orig = by_prefix.get("bench")
-        shuf = by_prefix.get("benchshuf")
-        if orig is None and shuf is None:
-            continue
-        orig_s = f"{fmt(orig['final_mean'], orig['final_std'])} (n={orig['n_seeds']})" if orig else "-"
-        shuf_s = f"{fmt(shuf['final_mean'], shuf['final_std'])} (n={shuf['n_seeds']})" if shuf else "-"
-        delta = "-"
-        if orig and shuf and orig["final_mean"] is not None and shuf["final_mean"] is not None:
-            delta = f"{shuf['final_mean'] - orig['final_mean']:+.2f}"
-        flags = []
-        if orig and orig["n_partial"]:
-            flags.append(f"{orig['n_partial']} orig partial")
-        if shuf and shuf["n_partial"]:
-            flags.append(f"{shuf['n_partial']} shuf partial")
-        flag_s = f"  [{', '.join(flags)}]" if flags else ""
-        print(f"{model:<16}{dataset:<16}{orig_s:<16}{shuf_s:<16}{delta:<14}{flag_s}")
+    for (model, dataset), by_seed in sorted(runs.items()):
+        s = summarize(by_seed)
+        flag = f"  [{s['n_partial']} partial]" if s["n_partial"] else ""
+        print(
+            f"{model:<16}{dataset:<16}{s['n_seeds']:<7}"
+            f"{fmt(s['final_mean'], s['final_std']):<16}"
+            f"{fmt(s['avg_mean'], s['avg_std']):<16}{flag}"
+        )
 
 
 if __name__ == "__main__":
