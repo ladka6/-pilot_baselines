@@ -17,6 +17,20 @@ from collections import defaultdict
 
 import numpy as np
 
+# Total classes / increment per dataset (utils/data.py), used to catch runs
+# truncated by a SLURM timeout. Comparing seeds against each other's max
+# task count (the old heuristic) misses this: if all 5 seeds get killed by
+# the same wall-clock limit, they're all truncated to the same task and look
+# mutually "complete" even though none of them reached the real final task.
+EXPECTED_TASKS = {
+    "cifar224": 100 // 5,
+    "cub": 200 // 10,
+    "imageneta": 200 // 20,
+    "imagenetr": 200 // 20,
+    "omnibenchmark": 300 // 30,
+    "vtab": 50 // 10,
+}
+
 
 def load_runs(roots):
     """-> {(model, dataset): {seed: tasks}}"""
@@ -52,9 +66,13 @@ def avg_inc_acc(tasks):
     return float(np.mean(curve)) if curve else None
 
 
-def summarize(by_seed):
-    n_tasks = [len(t) for t in by_seed.values()]
-    expected = max(n_tasks) if n_tasks else 0
+def summarize(by_seed, dataset):
+    expected = EXPECTED_TASKS.get(dataset)
+    if expected is None:
+        # Unknown dataset key: fall back to the old relative heuristic
+        # (compares seeds to each other -- can't catch uniform truncation).
+        n_tasks = [len(t) for t in by_seed.values()]
+        expected = max(n_tasks) if n_tasks else 0
     complete = {s: t for s, t in by_seed.items() if len(t) == expected}
     finals = [f for f in (final_top1(t) for t in complete.values()) if f is not None]
     avgs = [a for a in (avg_inc_acc(t) for t in complete.values()) if a is not None]
@@ -88,8 +106,12 @@ def main():
     print(hdr)
     print("-" * len(hdr))
     for (model, dataset), by_seed in sorted(runs.items()):
-        s = summarize(by_seed)
-        flag = f"  [{s['n_partial']} partial]" if s["n_partial"] else ""
+        s = summarize(by_seed, dataset)
+        flag = ""
+        if s["n_partial"]:
+            reached = max((len(t) for t in by_seed.values()), default=0)
+            expected = EXPECTED_TASKS.get(dataset, "?")
+            flag = f"  [{s['n_partial']} partial, reached task {reached}/{expected}]"
         print(
             f"{model:<16}{dataset:<16}{s['n_seeds']:<7}"
             f"{fmt(s['final_mean'], s['final_std']):<16}"
