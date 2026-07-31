@@ -1,5 +1,6 @@
 """Generate dedicated FLOPs-profiling configs: 8 methods x 1 dataset (cifar224
-by default), single seed, reduced epochs, config flag profile_train_flops=true.
+by default), single seed, FULL epoch count (same as the real accuracy run),
+config flag profile_train_flops=true.
 
 cifar224 has the most tasks (20) of any dataset here, making it the most
 informative single choice for distinguishing task-0 vs. later-task training
@@ -14,12 +15,14 @@ naturally captures per-method training nuances (only task 0 trains for
 ranpac/aper_adapter, only the current adapter -- not the eval-time ensemble
 -- trains for ease/mos) without per-method special-casing.
 
-Epochs reduced to 1 (from up to 20) across every epoch-related config key
-(epochs/tuned_epoch/init_epochs/later_epochs) to keep profiler overhead
-bounded -- accuracy from these runs is meaningless and must never be mixed
-into the accuracy tables. aggregate_results.py enforces this by filename
-prefix ("profileflops_"), loaded via a separate path that only ever feeds
-the measured FLOPs into the efficiency table.
+Full epoch count (not reduced) so the measured FLOPs are ground truth for
+the actual training run, not an extrapolation from a 1-epoch sample --
+removes any assumption that per-epoch cost is uniform across epochs. This
+means the profiler runs across the whole training loop, so time limits
+match the real accuracy sweep's per-dataset limits, not a fast reduced-scale
+probe. Accuracy from these runs still isn't meant to be reported (single
+seed, not 5), so they stay filtered out of the accuracy tables by filename
+prefix ("profileflops_") regardless.
 
 Usage:  python gen_profile_flops.py
 """
@@ -54,16 +57,12 @@ DATASETS = {
 
 SEED = [1993]  # single seed, this is a representative profiling run, not accuracy
 
-# Every epoch-related key any of the 8 methods reads, forced to 1 so a
-# whole-dataset profiling run finishes fast regardless of which key a given
-# method actually uses (extras are harmless no-ops for methods that don't
-# read them).
-EPOCH_KEYS = ["epochs", "tuned_epoch", "init_epochs", "later_epochs"]
-
-# 1h flat: even the heaviest full accuracy run (cifar224, up to 20 epochs x
-# 20 tasks) finished within ~3h; at 1 epoch/task these should be roughly
-# 1/20th that, with generous headroom for torch.profiler overhead.
-TIME_LIMIT = "01:00:00"
+# cifar224's own real per-dataset time limit from gen_bench_shuffled.py
+# (TIME_BY_DATASET["cifar224"]) was 6h for the accuracy sweep; give the
+# profiler run extra headroom on top of that since torch.profiler's
+# with_flops instrumentation adds real per-op overhead across the full
+# training loop (not just one probe step).
+TIME_LIMIT = "08:00:00"
 
 SBATCH_TEMPLATE = """#!/bin/bash
 #SBATCH --job-name=pilot-{method}-flops-{dataset}
@@ -106,9 +105,7 @@ def main():
             config["backbone_type"] = BACKBONE_IN21K[method]
             config["eval_shuffle"] = True  # match the canonical eval protocol
             config["profile_train_flops"] = True
-            for k in EPOCH_KEYS:
-                if k in config:
-                    config[k] = 1
+            # Epoch counts left as-is (full, not reduced) -- see docstring.
 
             config_path = f"exps/profile_flops/{method}_{dataset}.json"
             with open(config_path, "w") as f:
@@ -132,7 +129,7 @@ def main():
     os.chmod("slurm_profile_flops/submit_all.sh", 0o755)
 
     print(f"{len(launcher_lines)} (method, dataset) profiling configs generated "
-          f"(1 seed, 1 epoch each).")
+          f"(1 seed, full epoch count).")
     print("Nothing submitted. To launch all: ./slurm_profile_flops/submit_all.sh")
     print("Or submit individually via the printed sbatch commands, in waves.")
 
