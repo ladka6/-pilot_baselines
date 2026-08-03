@@ -10,14 +10,15 @@ batchwise_prompt (majority-vote prompt selection across the batch), so they
 are expected to show a real accuracy delta vs. the eval_shuffle=false runs in
 exps/bench/.
 
-Time limit: 3h flat for every job. The heaviest observed run so far (prompt/
-adapter methods, original bench sweep) finished within 1.5-2h; 3h leaves
-headroom while enabling more concurrent jobs per SBU wave than the old 6h/8h
-split allowed.
+Time limits are per-(method, dataset), not per-dataset -- actual cost varies
+enormously by method (e.g. coda_prompt takes ~85x longer than simplecil on
+the same dataset; a single flat-per-dataset number either wastes budget on
+fast methods or times out slow ones). See TIME_LIMIT_FOR below.
 
 Usage:  python gen_bench_shuffled.py
 """
 import json
+import math
 import os
 
 METHODS = {
@@ -53,35 +54,87 @@ DATASETS = {
 
 SEEDS = [1993, 1994, 1995, 1996, 1997]
 
-# Flat 2h undershot for the heavier methods on the bigger/many-task datasets:
-# ease/mos/coda_prompt all TIMEOUT'd on cifar224 and omnibenchmark, and
-# coda_prompt also timed out on imagenetr. Per-dataset limit instead of one
-# flat number, based on observed runtime (cifar224 has the most train images
-# per class of any of these sets, independent of task count).
-#
-# imagenetr bumped 3h -> 6h: the l2p/dualprompt/coda_prompt _inr config
-# variants (used only for this dataset) double tuned_epoch AND double
-# init_cls/increment relative to their own default configs -- coda_prompt's
-# _inr config alone (tuned_epoch 20->50) still timed out at exactly 3h with
-# all 5 seeds; l2p/dualprompt's _inr configs double tuned_epoch too (5->10),
-# smaller magnitude but same pattern, so give them the same headroom before
-# hitting the wall a second time.
-TIME_BY_DATASET = {
-    "cifar224": "06:00:00",
-    "cub": "04:00:00",
-    "imageneta": "02:00:00",
-    "imagenetr": "06:00:00",
-    # 4h -> 8h: coda_prompt on omnibenchmark paced ~29min/task across 10
-    # tasks (~4.8h projected total) despite the SAME tuned_epoch=20 as
-    # cifar224 (which finished in 3.09h with 20 tasks) -- omnibenchmark's
-    # 30 classes/task (vs cifar224's 5) makes each task far more expensive
-    # for coda_prompt specifically, even with fewer tasks overall. ease/mos
-    # both finished comfortably under 4h here, so this seems coda_prompt-
-    # specific, but the limit is per-dataset not per-method; the extra
-    # headroom is harmless for methods that don't need it.
-    "omnibenchmark": "08:00:00",
-    "vtab": "02:00:00",
+# Measured train_seconds_total (wall clock, from aggregate_results.py's
+# efficiency table) for (method, dataset) pairs that have actually
+# completed a run. Ground truth -- everything else here is derived or
+# guessed from this.
+OBSERVED_TRAIN_SECONDS = {
+    ("simplecil", "cifar224"): 130.10, ("simplecil", "cub"): 55.93,
+    ("simplecil", "imageneta"): 27.46, ("simplecil", "imagenetr"): 71.67,
+    ("simplecil", "omnibenchmark"): 232.56, ("simplecil", "vtab"): 8.53,
+    ("ranpac", "cifar224"): 736.55, ("ranpac", "cub"): 405.05,
+    ("ranpac", "imageneta"): 261.29, ("ranpac", "imagenetr"): 398.25,
+    ("ranpac", "omnibenchmark"): 1383.50, ("ranpac", "vtab"): 211.90,
+    ("aper_adapter", "cifar224"): 556.56, ("aper_adapter", "cub"): 142.30,
+    ("aper_adapter", "imageneta"): 134.33, ("aper_adapter", "imagenetr"): 311.51,
+    ("aper_adapter", "omnibenchmark"): 1412.45, ("aper_adapter", "vtab"): 150.70,
+    ("ease", "cifar224"): 6836.74, ("ease", "cub"): 1711.22,
+    ("ease", "imageneta"): 914.27, ("ease", "imagenetr"): 3202.72,
+    ("ease", "omnibenchmark"): 10673.48, ("ease", "vtab"): 290.34,
+    ("mos", "cifar224"): 6011.11, ("mos", "cub"): 1655.85,
+    ("mos", "imageneta"): 940.16, ("mos", "imagenetr"): 1848.65,
+    ("mos", "omnibenchmark"): 10736.30, ("mos", "vtab"): 279.90,
+    ("coda_prompt", "cifar224"): 11117.14, ("coda_prompt", "cub"): 2353.39,
+    ("coda_prompt", "imageneta"): 1418.64, ("coda_prompt", "vtab"): 833.17,
+    ("l2p", "vtab"): 226.48,
+    ("dualprompt", "vtab"): 209.02,
 }
+
+# coda_prompt on imagenetr/omnibenchmark TIMED OUT (no completed
+# measurement to derive from) -- these are reasoned from partial-progress
+# pacing instead:
+#  - imagenetr: TIMEOUT'd at exactly 3h across all 5 seeds; its _inr config
+#    sets tuned_epoch=50 vs the default 20, implying ~3.86h real need.
+#  - omnibenchmark: paced ~29min/task across 10 tasks (job 25180737, seen
+#    live via log tail), ~4.8h projected total.
+MANUAL_TIME_OVERRIDES = {
+    ("coda_prompt", "imagenetr"): "06:00:00",
+    ("coda_prompt", "omnibenchmark"): "08:00:00",
+}
+
+# l2p/dualprompt have never been run beyond the standalone VTAB ablation --
+# no observed data for their other 5 datasets. Both are prompt-pool methods
+# structurally similar to coda_prompt, but with much smaller tuned_epoch (5
+# vs coda_prompt's 20 by default, 10 vs 50 for the imagenetr _inr variant
+# specifically) -- derive a conservative estimate by scaling coda_prompt's
+# own known/estimated time by that epoch ratio, rather than guessing blind
+# or reusing an unrelated per-dataset default. Unverified until real data
+# lands; watch for TIMEOUTs and adjust.
+EPOCH_RATIO = {"default": 5 / 20, "imagenetr": 10 / 50}
+
+
+def _hms(seconds):
+    seconds = max(seconds, 3600)  # 1h floor
+    seconds = math.ceil(seconds / 1800) * 1800  # round up to nearest 30 min
+    h, r = divmod(int(seconds), 3600)
+    m = r // 60
+    return f"{h:02d}:{m:02d}:00"
+
+
+def _hms_to_seconds(hms):
+    h, m, s = (int(x) for x in hms.split(":"))
+    return h * 3600 + m * 60 + s
+
+
+SAFETY_FACTOR = 1.8  # headroom over the single observed data point
+
+
+def time_limit_for(method, dataset):
+    if (method, dataset) in MANUAL_TIME_OVERRIDES:
+        return MANUAL_TIME_OVERRIDES[(method, dataset)]
+    observed = OBSERVED_TRAIN_SECONDS.get((method, dataset))
+    if observed is not None:
+        return _hms(observed * SAFETY_FACTOR)
+    if method in ("l2p", "dualprompt"):
+        ratio = EPOCH_RATIO["imagenetr"] if dataset == "imagenetr" else EPOCH_RATIO["default"]
+        coda_seconds = (
+            _hms_to_seconds(MANUAL_TIME_OVERRIDES[("coda_prompt", dataset)])
+            if ("coda_prompt", dataset) in MANUAL_TIME_OVERRIDES
+            else _hms_to_seconds(_hms(OBSERVED_TRAIN_SECONDS[("coda_prompt", dataset)] * SAFETY_FACTOR))
+        )
+        return _hms(coda_seconds * ratio)
+    raise KeyError(f"No time estimate for ({method}, {dataset}) -- add data or an override.")
+
 
 SBATCH_TEMPLATE = """#!/bin/bash
 #SBATCH --job-name=pilot-{method}-shuf-{dataset}
@@ -149,7 +202,7 @@ def main():
                     SBATCH_TEMPLATE.format(
                         method=method,
                         dataset=dataset,
-                        time=TIME_BY_DATASET[dataset],
+                        time=time_limit_for(method, dataset),
                         config=config_path,
                     )
                 )
