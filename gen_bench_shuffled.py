@@ -58,11 +58,19 @@ SEEDS = [1993, 1994, 1995, 1996, 1997]
 # coda_prompt also timed out on imagenetr. Per-dataset limit instead of one
 # flat number, based on observed runtime (cifar224 has the most train images
 # per class of any of these sets, independent of task count).
+#
+# imagenetr bumped 3h -> 6h: the l2p/dualprompt/coda_prompt _inr config
+# variants (used only for this dataset) double tuned_epoch AND double
+# init_cls/increment relative to their own default configs -- coda_prompt's
+# _inr config alone (tuned_epoch 20->50) still timed out at exactly 3h with
+# all 5 seeds; l2p/dualprompt's _inr configs double tuned_epoch too (5->10),
+# smaller magnitude but same pattern, so give them the same headroom before
+# hitting the wall a second time.
 TIME_BY_DATASET = {
     "cifar224": "06:00:00",
     "cub": "04:00:00",
     "imageneta": "02:00:00",
-    "imagenetr": "03:00:00",
+    "imagenetr": "06:00:00",
     "omnibenchmark": "04:00:00",
     "vtab": "02:00:00",
 }
