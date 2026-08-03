@@ -71,7 +71,15 @@ TIME_BY_DATASET = {
     "cub": "04:00:00",
     "imageneta": "02:00:00",
     "imagenetr": "06:00:00",
-    "omnibenchmark": "04:00:00",
+    # 4h -> 8h: coda_prompt on omnibenchmark paced ~29min/task across 10
+    # tasks (~4.8h projected total) despite the SAME tuned_epoch=20 as
+    # cifar224 (which finished in 3.09h with 20 tasks) -- omnibenchmark's
+    # 30 classes/task (vs cifar224's 5) makes each task far more expensive
+    # for coda_prompt specifically, even with fewer tasks overall. ease/mos
+    # both finished comfortably under 4h here, so this seems coda_prompt-
+    # specific, but the limit is per-dataset not per-method; the extra
+    # headroom is harmless for methods that don't need it.
+    "omnibenchmark": "08:00:00",
     "vtab": "02:00:00",
 }
 
