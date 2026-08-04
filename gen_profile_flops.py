@@ -69,11 +69,19 @@ DATASETS = {
 
 SEED = [1993]  # single seed, this is a representative profiling run, not accuracy
 
-# Every epoch-related key any of the 8 methods reads, forced to 1 so a
-# single profiling run finishes in a bounded, small number of batches
-# regardless of which key a given method actually uses (extras are
+# Every epoch-related key any of the 8 methods reads, forced to a small
+# value so a single profiling run finishes in a bounded, small number of
+# batches regardless of which key a given method actually uses (extras are
 # harmless no-ops for methods that don't read them).
 EPOCH_KEYS = ["epochs", "tuned_epoch", "init_epochs", "later_epochs"]
+
+# coda_prompt's own CosineSchedule (models/coda_prompt.py:243) divides by
+# (K-1) where K=tuned_epoch -- forcing epochs=1 like everyone else makes
+# that a literal division by zero (real training never hits this since it
+# always uses tuned_epoch>=5). Use 2 for coda_prompt specifically, the
+# smallest value that avoids the zero denominator.
+EPOCH_VALUE = {"coda_prompt": 2}
+DEFAULT_EPOCH_VALUE = 1
 
 # 1h flat default. ease/mos both TIMEOUT'd at exactly 1h (job 25197118,
 # 25197119): unlike ranpac/aper_adapter (only task 0 trains, tasks 1-19 do
@@ -127,9 +135,10 @@ def main():
             config["backbone_type"] = BACKBONE_IN21K[method]
             config["eval_shuffle"] = True  # match the canonical eval protocol
             config["profile_train_flops"] = True
+            epoch_value = EPOCH_VALUE.get(method, DEFAULT_EPOCH_VALUE)
             for k in EPOCH_KEYS:
                 if k in config:
-                    config[k] = 1
+                    config[k] = epoch_value
 
             config_path = f"exps/profile_flops/{method}_{dataset}.json"
             with open(config_path, "w") as f:
