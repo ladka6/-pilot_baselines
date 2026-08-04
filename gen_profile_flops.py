@@ -75,11 +75,16 @@ SEED = [1993]  # single seed, this is a representative profiling run, not accura
 # harmless no-ops for methods that don't read them).
 EPOCH_KEYS = ["epochs", "tuned_epoch", "init_epochs", "later_epochs"]
 
-# 1h flat: even the heaviest full accuracy run finished within ~3h; at 1
-# epoch/task these should be a fraction of that, with generous headroom
-# for torch.profiler's per-op overhead (much smaller now that it's bounded
-# to 1 epoch instead of accumulating across the whole training loop).
+# 1h flat default. ease/mos both TIMEOUT'd at exactly 1h (job 25197118,
+# 25197119): unlike ranpac/aper_adapter (only task 0 trains, tasks 1-19 do
+# ~0 epochs of real gradient work even with tuned_epoch forced to 1 --
+# their own `if cur_task==0: train else: pass` logic is untouched by the
+# config), ease/mos genuinely train a new adapter on EVERY one of the 20
+# tasks, so forcing 1 epoch still means 20 real epochs of gradient work,
+# and they're slower per-sample than the other methods (visible in their
+# eval_ms_per_sample being ~10-20x everyone else's). Override per method.
 TIME_LIMIT = "01:00:00"
+TIME_OVERRIDE = {"ease": "03:00:00", "mos": "03:00:00"}
 
 SBATCH_TEMPLATE = """#!/bin/bash
 #SBATCH --job-name=pilot-{method}-flops-{dataset}
@@ -136,7 +141,7 @@ def main():
                 f.write(
                     SBATCH_TEMPLATE.format(
                         method=method, dataset=dataset,
-                        time=TIME_LIMIT, config=config_path,
+                        time=TIME_OVERRIDE.get(method, TIME_LIMIT), config=config_path,
                     )
                 )
             os.chmod(script_path, 0o755)
