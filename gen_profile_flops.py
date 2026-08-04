@@ -1,6 +1,7 @@
 """Generate dedicated FLOPs-profiling configs: 8 methods x 1 dataset (cifar224
-by default), single seed, FULL epoch count (same as the real accuracy run),
-config flag profile_train_flops=true.
+by default), single seed, REDUCED epoch count (1 instead of the real
+tuned_epoch/epochs/init_epochs/later_epochs, up to 50), config flag
+profile_train_flops=true.
 
 cifar224 has the most tasks (20) of any dataset here, making it the most
 informative single choice for distinguishing task-0 vs. later-task training
@@ -15,14 +16,25 @@ naturally captures per-method training nuances (only task 0 trains for
 ranpac/aper_adapter, only the current adapter -- not the eval-time ensemble
 -- trains for ease/mos) without per-method special-casing.
 
-Full epoch count (not reduced) so the measured FLOPs are ground truth for
-the actual training run, not an extrapolation from a 1-epoch sample --
-removes any assumption that per-epoch cost is uniform across epochs. This
-means the profiler runs across the whole training loop, so time limits
-match the real accuracy sweep's per-dataset limits, not a fast reduced-scale
-probe. Accuracy from these runs still isn't meant to be reported (single
-seed, not 5), so they stay filtered out of the accuracy tables by filename
-prefix ("profileflops_") regardless.
+Epochs reduced to 1: a full-epoch-count attempt (8h/14h time limits) OOM'd
+on all 8 methods, some (ranpac, aper_adapter) before even completing task
+0. Root cause: torch.profiler(with_flops=True) records a permanent,
+never-discarded metadata entry (op name, tensor shapes, dtypes, FLOPs) for
+EVERY tensor operation executed while active -- unlike normal training,
+whose memory is flat/steady-state per step, this profiling record grows
+for as long as the profiler context is open. Profiling a full multi-epoch
+task means tens of thousands of batches' worth of operation records held
+in memory simultaneously, which exceeded 40GB even for a single task.
+
+aggregate_results.py's per_seed_summary already scales
+measured_flops x (real_epochs / profiled_epochs) per task using each
+run's logged profiled_epochs field, so profiling 1 epoch and extrapolating
+to the real epoch count needs no further code change here. This
+extrapolation is exact, not approximate, for FLOPs specifically (unlike
+wall-clock time): FLOPs depend only on tensor shapes, and none of these 8
+methods (nor TOSCA) change their per-task computational graph's shapes
+between epochs (no early stopping, no epoch-dependent architecture
+changes) -- verified by reading every method's training loop.
 
 Usage:  python gen_profile_flops.py
 """
@@ -57,12 +69,17 @@ DATASETS = {
 
 SEED = [1993]  # single seed, this is a representative profiling run, not accuracy
 
-# cifar224's own real per-dataset time limit from gen_bench_shuffled.py
-# (TIME_BY_DATASET["cifar224"]) was 6h for the accuracy sweep; give the
-# profiler run extra headroom on top of that since torch.profiler's
-# with_flops instrumentation adds real per-op overhead across the full
-# training loop (not just one probe step).
-TIME_LIMIT = "08:00:00"
+# Every epoch-related key any of the 8 methods reads, forced to 1 so a
+# single profiling run finishes in a bounded, small number of batches
+# regardless of which key a given method actually uses (extras are
+# harmless no-ops for methods that don't read them).
+EPOCH_KEYS = ["epochs", "tuned_epoch", "init_epochs", "later_epochs"]
+
+# 1h flat: even the heaviest full accuracy run finished within ~3h; at 1
+# epoch/task these should be a fraction of that, with generous headroom
+# for torch.profiler's per-op overhead (much smaller now that it's bounded
+# to 1 epoch instead of accumulating across the whole training loop).
+TIME_LIMIT = "01:00:00"
 
 SBATCH_TEMPLATE = """#!/bin/bash
 #SBATCH --job-name=pilot-{method}-flops-{dataset}
@@ -105,7 +122,9 @@ def main():
             config["backbone_type"] = BACKBONE_IN21K[method]
             config["eval_shuffle"] = True  # match the canonical eval protocol
             config["profile_train_flops"] = True
-            # Epoch counts left as-is (full, not reduced) -- see docstring.
+            for k in EPOCH_KEYS:
+                if k in config:
+                    config[k] = 1
 
             config_path = f"exps/profile_flops/{method}_{dataset}.json"
             with open(config_path, "w") as f:
@@ -129,7 +148,7 @@ def main():
     os.chmod("slurm_profile_flops/submit_all.sh", 0o755)
 
     print(f"{len(launcher_lines)} (method, dataset) profiling configs generated "
-          f"(1 seed, full epoch count).")
+          f"(1 seed, 1 epoch each).")
     print("Nothing submitted. To launch all: ./slurm_profile_flops/submit_all.sh")
     print("Or submit individually via the printed sbatch commands, in waves.")
 
