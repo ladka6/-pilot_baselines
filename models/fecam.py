@@ -37,7 +37,17 @@ class Learner(BaseLearner):
 
     def after_task(self):
         self._known_classes = self._total_classes
-    
+
+    def extra_param_count(self):
+        """cov_mats holds one [feature_dim, feature_dim] covariance matrix
+        per class, appended every task and used directly at eval time in
+        _maha_dist/_mahalanobis -- real classification state, not solver
+        scratch. It's a plain list of torch.Tensor, not nn.Parameter/
+        registered buffers, so count_parameters(self._network) can't see
+        it; without this it would silently exclude tens of millions of
+        elements from total_params (grows as nb_classes * feature_dim**2)."""
+        return sum(c.numel() for c in self.cov_mats)
+
     def replace_fc(self,trainloader, model, args):
         model = model.eval()
         embedding_list = []

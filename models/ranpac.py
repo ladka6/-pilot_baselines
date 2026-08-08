@@ -28,7 +28,24 @@ class Learner(BaseLearner):
     def after_task(self):
         self._known_classes = self._total_classes
 
-    def replace_fc(self, trainloader, model, args):       
+    def extra_param_count(self):
+        """W_rand (the fixed random projection) and Q (the class-sum
+        accumulator, needed to re-solve Wo as new classes arrive) are plain
+        torch.Tensor attributes, not nn.Parameter/registered buffers, so
+        count_parameters(self._network) can't see them -- they'd otherwise
+        be silently excluded from total_params even though they're real
+        state this model needs to keep and use for classification. G (the
+        [M,M] Gram matrix) is excluded on purpose: it's solver scratch, not
+        deployed capacity, same convention as TOSCA's own ridge_extra_param_
+        count (which counts C but not G)."""
+        extra = 0
+        if getattr(self, "W_rand", None) is not None:
+            extra += self.W_rand.numel()
+        if getattr(self, "Q", None) is not None:
+            extra += self.Q.numel()
+        return extra
+
+    def replace_fc(self, trainloader, model, args):
         model = model.eval()
         embedding_list = []
         label_list = []
